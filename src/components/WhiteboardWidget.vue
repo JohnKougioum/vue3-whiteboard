@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useElementSize } from '@vueuse/core'
+import { useElementSize, watchDebounced } from '@vueuse/core'
 import { getStroke } from 'perfect-freehand'
 
 const canvas = ref<HTMLCanvasElement>()
@@ -8,7 +8,9 @@ const whiteboardContainer = ref<HTMLDivElement>()
 let ctx: CanvasRenderingContext2D | null = null
 const { width: canvasWidth, height: canvasHeight } = useElementSize(canvas)
 let isDrawing = false
-const points: Array<Array<{ x: number; y: number }>> = []
+const points: Array<Array<{ x: number; y: number; color: string }>> = []
+
+const selectedColor = ref('#000')
 
 const dpr = window.devicePixelRatio || 1
 
@@ -38,29 +40,33 @@ function getSvgPathFromStroke(stroke: number[][]) {
   return d.join(' ')
 }
 
-function draw(color = '#000', isMouseDown = false) {
+function draw(isMouseDown = false) {
   if (isMouseDown && ctx) {
-    const stroke = getStroke(points[points.length - 1], {
-      size: 6,
-      smoothing: 0.5,
-      thinning: 0.5,
-      streamline: 1,
-      easing: (t) => t,
-      start: { taper: 0, cap: true },
-      end: { taper: 0, cap: true }
-    })
-    const pathData = getSvgPathFromStroke(stroke)
-    const myPath = new Path2D(pathData)
-    ctx.fillStyle = color
-    ctx.fill(myPath)
+    drawLines(points[points.length - 1])
   }
+}
+
+function drawLines(arrayOfPoints: Array<{ x: number; y: number; color: string }>) {
+  const stroke = getStroke(arrayOfPoints, {
+    size: 6,
+    smoothing: 0.5,
+    thinning: 0.5,
+    streamline: 1,
+    easing: (t) => t,
+    start: { taper: 0, cap: true },
+    end: { taper: 0, cap: true }
+  })
+  const pathData = getSvgPathFromStroke(stroke)
+  const myPath = new Path2D(pathData)
+  ctx!.fillStyle = arrayOfPoints[0].color
+  ctx!.fill(myPath)
 }
 
 function handleMouseMove(e: MouseEvent) {
   if (!isDrawing) return
   const [x, y] = mousePosition(e)
-  points[points.length - 1].push({ x, y })
-  draw('black', true)
+  points[points.length - 1].push({ x, y, color: selectedColor.value })
+  draw(true)
 }
 
 function handleMouseDown() {
@@ -82,6 +88,24 @@ function mousePosition(e: MouseEvent) {
 function handleMouseUp() {
   isDrawing = false
 }
+
+const { width: containerWidth } = useElementSize(whiteboardContainer)
+watchDebounced(
+  containerWidth,
+  () => {
+    if (canvas.value && ctx) {
+      canvas.value.width = whiteboardContainer.value!.clientWidth * dpr
+      canvas.value.height = whiteboardContainer.value!.clientHeight * dpr
+      canvas.value.style.width = `${whiteboardContainer.value!.clientWidth}px`
+      canvas.value.style.height = `${whiteboardContainer.value!.clientHeight}px`
+
+      points.forEach((point) => {
+        drawLines(point)
+      })
+    }
+  },
+  { debounce: 200 }
+)
 </script>
 
 <template>
@@ -101,5 +125,9 @@ function handleMouseUp() {
   width: 100%;
   height: 80svh;
   background: white;
+}
+
+canvas {
+  image-rendering: pixelated;
 }
 </style>
