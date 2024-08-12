@@ -1,20 +1,35 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useElementSize, watchDebounced } from '@vueuse/core'
 import { getStroke } from 'perfect-freehand'
+
+type PointEntry = {
+  type: string
+  color: string
+  points: Array<[number, number]>
+}
 
 const canvas = ref<HTMLCanvasElement>()
 const whiteboardContainer = ref<HTMLDivElement>()
 let ctx: CanvasRenderingContext2D | null = null
-const { width: canvasWidth, height: canvasHeight } = useElementSize(canvas)
+// const { width: canvasWidth, height: canvasHeight } = useElementSize(canvas)
 let isDrawing = false
-const points: Array<Array<{ x: number; y: number; color: string }>> = []
+let points: PointEntry[] = []
 
 const selectedColor = ref('#000')
 
 const dpr = window.devicePixelRatio || 1
+let zoom = 1
+let translateX = 0
+let translateY = 0
+let startX = 0
+let startY = 0
+let isPanning = false
 
 onMounted(() => {
+  localStorage.removeItem('whiteboard')
+  whiteboardContainer.value?.style.setProperty('caret-color', 'black')
+
   ctx = canvas.value!.getContext('2d')
   canvas.value!.width = whiteboardContainer.value!.clientWidth * dpr
   canvas.value!.height = whiteboardContainer.value!.clientHeight * dpr
@@ -40,14 +55,33 @@ function getSvgPathFromStroke(stroke: number[][]) {
   return d.join(' ')
 }
 
+// TODO: https://www.youtube.com/watch?v=AKd1dDE9sFE
 function draw(isMouseDown = false) {
-  if (isMouseDown && ctx) {
-    drawLines(points[points.length - 1])
+  if (ctx) {
+    if (isMouseDown) {
+      drawLines(points[points.length - 1])
+    } else {
+      ctx!.clearRect(0, 0, canvas.value!.width, canvas.value!.height)
+      ctx!.save()
+      ctx!.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0)
+
+      if (localStorage.getItem('whiteboard')) {
+        JSON.parse(localStorage.getItem('whiteboard')!).forEach((point: PointEntry) => {
+          drawLines(point)
+        })
+      }
+
+      points.forEach((point) => {
+        drawLines(point)
+      })
+    }
+
+    ctx!.restore()
   }
 }
 
-function drawLines(arrayOfPoints: Array<{ x: number; y: number; color: string }>) {
-  const stroke = getStroke(arrayOfPoints, {
+function drawLines(point: PointEntry) {
+  const stroke = getStroke(point.points, {
     size: 6,
     smoothing: 0.5,
     thinning: 0.5,
@@ -58,28 +92,41 @@ function drawLines(arrayOfPoints: Array<{ x: number; y: number; color: string }>
   })
   const pathData = getSvgPathFromStroke(stroke)
   const myPath = new Path2D(pathData)
-  ctx!.fillStyle = arrayOfPoints[0].color
+  ctx!.fillStyle = point.color
   ctx!.fill(myPath)
 }
 
 function handleMouseMove(e: MouseEvent) {
-  if (!isDrawing) return
-  const [x, y] = mousePosition(e)
-  points[points.length - 1].push({ x, y, color: selectedColor.value })
-  draw(true)
+  if (isPanning) {
+    const [x, y] = mousePosition(e)
+    // translateX += (x - startX) / zoom
+    // translateY += (y - startY) / zoom
+    startX = x
+    startY = y
+    draw()
+  } else if (isDrawing) {
+    const [x, y] = mousePosition(e)
+    points[points.length - 1].points.push([x, y])
+    draw(true)
+  }
 }
 
-function handleMouseDown() {
-  isDrawing = true
-  points.push([])
+function handleMouseDown(e: MouseEvent) {
+  if (e.button === 1) {
+    isPanning = true
+    ;[startX, startY] = mousePosition(e)
+  } else {
+    isDrawing = true
+    points.push({ type: 'freehand', color: selectedColor.value, points: [] })
+  }
 }
 
 function mousePosition(e: MouseEvent) {
   if (canvas.value) {
     const rect = canvas.value.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) * dpr) / zoom - translateX / zoom
+    const y = ((e.clientY - rect.top) * dpr) / zoom - translateY / zoom
 
-    const x = (e.clientX - rect.left) * (canvasWidth.value / rect.width)
-    const y = (e.clientY - rect.top) * (canvasHeight.value / rect.height)
     return [x, y]
   }
   return [0, 0]
@@ -87,6 +134,26 @@ function mousePosition(e: MouseEvent) {
 
 function handleMouseUp() {
   isDrawing = false
+  isPanning = false
+  const whiteboardData = localStorage.getItem('whiteboard')
+    ? JSON.parse(localStorage.getItem('whiteboard')!)
+    : []
+  localStorage.setItem('whiteboard', JSON.stringify([...whiteboardData, ...points]))
+  points = []
+}
+
+function handleWheel(e: WheelEvent) {
+  const delta = e.deltaY < 0 ? 0.1 : -0.1
+  const newZoom = Math.min(Math.max(zoom + delta, 0.5), 2)
+
+  const [mouseX, mouseY] = mousePosition(e)
+
+  // Adjust translateX and translateY to zoom relative to the mouse pointer
+  translateX -= mouseX * (newZoom - zoom)
+  translateY -= mouseY * (newZoom - zoom)
+
+  zoom = newZoom
+  draw()
 }
 
 const { width: containerWidth } = useElementSize(whiteboardContainer)
@@ -99,23 +166,27 @@ watchDebounced(
       canvas.value.style.width = `${whiteboardContainer.value!.clientWidth}px`
       canvas.value.style.height = `${whiteboardContainer.value!.clientHeight}px`
 
-      points.forEach((point) => {
-        drawLines(point)
-      })
+      draw()
     }
   },
   { debounce: 200 }
 )
+
+onBeforeUnmount(() => {
+  localStorage.removeItem('whiteboard')
+})
 </script>
 
 <template>
   <div ref="whiteboardContainer" class="whiteboard-container">
     <canvas
       ref="canvas"
+      id="whiteboard"
       @mousemove="handleMouseMove"
       @mousedown="handleMouseDown"
       @mouseup="handleMouseUp"
       @mouseout="handleMouseUp"
+      @wheel="handleWheel"
     />
   </div>
 </template>
@@ -124,10 +195,15 @@ watchDebounced(
 .whiteboard-container {
   width: 100%;
   height: 80svh;
-  background: white;
+  overflow: hidden;
 }
 
 canvas {
+  cursor:
+    url("data:image/svg+xml,%3Csvg width='23' height='23' viewBox='0 0 23 23' fill='black' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0.2444 11.3203H22.8718M11.5581 0.006558V22.634' stroke='%23000' stroke-width='1'/%3E%3C/svg%3E")
+      12.5 12.5,
+    crosshair;
+  background-color: white;
   image-rendering: pixelated;
 }
 </style>
