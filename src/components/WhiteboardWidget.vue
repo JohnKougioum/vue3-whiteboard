@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useElementSize, watchDebounced } from '@vueuse/core'
 import { getStroke } from 'perfect-freehand'
 
@@ -22,8 +22,8 @@ const dpr = window.devicePixelRatio || 1
 let zoom = 1
 let translateX = 0
 let translateY = 0
-let startX = 0
-let startY = 0
+let panOffset = { x: 0, y: 0 }
+let startPanMousePosition = { x: 0, y: 0 }
 let isPanning = false
 
 onMounted(() => {
@@ -31,12 +31,11 @@ onMounted(() => {
   whiteboardContainer.value?.style.setProperty('caret-color', 'black')
 
   ctx = canvas.value!.getContext('2d')
-  canvas.value!.width = whiteboardContainer.value!.clientWidth * dpr
-  canvas.value!.height = whiteboardContainer.value!.clientHeight * dpr
-  canvas.value!.style.width = `${whiteboardContainer.value!.clientWidth}px`
-  canvas.value!.style.height = `${whiteboardContainer.value!.clientHeight}px`
+  initCanvasDimensions()
   ctx!.setTransform(dpr, 0, 0, dpr, 0, 0)
-  draw()
+  ctx?.save()
+  ctx!.translate(panOffset.x, panOffset.y)
+  ctx!.restore()
 })
 
 function getSvgPathFromStroke(stroke: number[][]) {
@@ -65,6 +64,9 @@ function draw(isMouseDown = false) {
       ctx!.save()
       ctx!.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0)
 
+      // ctx!.translate
+      ctx!.scale(zoom, zoom)
+
       if (localStorage.getItem('whiteboard')) {
         JSON.parse(localStorage.getItem('whiteboard')!).forEach((point: PointEntry) => {
           drawLines(point)
@@ -79,6 +81,11 @@ function draw(isMouseDown = false) {
     ctx!.restore()
   }
 }
+
+const scaledWidth = computed(() => (canvas.value?.width || 0) * zoom)
+const scaledHeight = computed(() => (canvas.value?.height || 0) * zoom)
+const scaleOffsetX = computed(() => (scaledWidth.value - canvas.value!.width) / 2)
+const scaleOffsetY = computed(() => (scaledHeight.value - canvas.value!.height) / 2)
 
 function drawLines(point: PointEntry) {
   const stroke = getStroke(point.points, {
@@ -99,11 +106,20 @@ function drawLines(point: PointEntry) {
 function handleMouseMove(e: MouseEvent) {
   if (isPanning) {
     const [x, y] = mousePosition(e)
-    // translateX += (x - startX) / zoom
-    // translateY += (y - startY) / zoom
-    startX = x
-    startY = y
+    const deltaX = x - startPanMousePosition.x
+    const deltaY = y - startPanMousePosition.y
+    panOffset.x += deltaX
+    panOffset.y += deltaY
+
+    console.log('mouse position', x, y)
+
+    // console.log('startPanMousePosition', startPanMousePosition)
+    // console.log('panOffset', panOffset)
+
+    ctx?.save()
+    ctx!.translate(panOffset.x, panOffset.y)
     draw()
+    ctx?.restore()
   } else if (isDrawing) {
     const [x, y] = mousePosition(e)
     points[points.length - 1].points.push([x, y])
@@ -114,7 +130,9 @@ function handleMouseMove(e: MouseEvent) {
 function handleMouseDown(e: MouseEvent) {
   if (e.button === 1) {
     isPanning = true
-    ;[startX, startY] = mousePosition(e)
+    const [x, y] = mousePosition(e)
+    startPanMousePosition.x = x
+    startPanMousePosition.y = y
   } else {
     isDrawing = true
     points.push({ type: 'freehand', color: selectedColor.value, points: [] })
@@ -124,8 +142,13 @@ function handleMouseDown(e: MouseEvent) {
 function mousePosition(e: MouseEvent) {
   if (canvas.value) {
     const rect = canvas.value.getBoundingClientRect()
-    const x = ((e.clientX - rect.left) * dpr) / zoom - translateX / zoom
-    const y = ((e.clientY - rect.top) * dpr) / zoom - translateY / zoom
+
+    //TODO: redrawing after panning is not working properly
+    // console.log(canvas.value.width, canvas.value.height, rect.left, rect.top)
+    // console.log(e.clientX, e.clientY)
+
+    const x = ((e.clientX - rect.left) * dpr) / zoom - panOffset.x
+    const y = ((e.clientY - rect.top) * dpr) / zoom - panOffset.y
 
     return [x, y]
   }
@@ -161,16 +184,21 @@ watchDebounced(
   containerWidth,
   () => {
     if (canvas.value && ctx) {
-      canvas.value.width = whiteboardContainer.value!.clientWidth * dpr
-      canvas.value.height = whiteboardContainer.value!.clientHeight * dpr
-      canvas.value.style.width = `${whiteboardContainer.value!.clientWidth}px`
-      canvas.value.style.height = `${whiteboardContainer.value!.clientHeight}px`
-
+      ctx!.save()
+      initCanvasDimensions()
       draw()
+      ctx!.restore()
     }
   },
   { debounce: 200 }
 )
+
+function initCanvasDimensions() {
+  canvas.value!.width = whiteboardContainer.value!.clientWidth * dpr
+  canvas.value!.height = whiteboardContainer.value!.clientHeight * dpr
+  canvas.value!.style.width = `${whiteboardContainer.value!.clientWidth}px`
+  canvas.value!.style.height = `${whiteboardContainer.value!.clientHeight}px`
+}
 
 onBeforeUnmount(() => {
   localStorage.removeItem('whiteboard')

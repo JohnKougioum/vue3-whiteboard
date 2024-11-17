@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import WhiteboardWidget from './components/WhiteboardWidget.vue'
+import NewWhiteboard from './components/NewWhiteboard.vue'
 </script>
 
 <template>
   <div id="app">
-    <WhiteboardWidget />
+    <NewWhiteboard />
   </div>
 </template>
 
