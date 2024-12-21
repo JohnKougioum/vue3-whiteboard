@@ -15,6 +15,5 @@ body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: rgb(42, 42, 42);
 }
 </style>
