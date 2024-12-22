@@ -144,11 +144,8 @@ function mousePosition(e: MouseEvent) {
     const rect = canvas.value.getBoundingClientRect()
 
     //TODO: redrawing after panning is not working properly
-    // console.log(canvas.value.width, canvas.value.height, rect.left, rect.top)
-    // console.log(e.clientX, e.clientY)
-
-    const x = ((e.clientX - rect.left) * dpr) / zoom - panOffset.x
-    const y = ((e.clientY - rect.top) * dpr) / zoom - panOffset.y
+    const x = (e.clientX - rect.left) * dpr
+    const y = (e.clientY - rect.top) * dpr
 
     return [x, y]
   }
