@@ -10,7 +10,8 @@ import {
   positionWithinElement,
   cursorForPosition,
   resizedCoordinates,
-  adjustElementCoordinates
+  adjustElementCoordinates,
+  getSvgPathFromStroke
 } from '../utils/whiteboard/utils'
 import {
   createHistoryPoint,
@@ -20,6 +21,7 @@ import {
   removeLastLocalRedo,
   storeRedoPoint
 } from '../utils/whiteboard/history'
+import { getStroke } from 'perfect-freehand'
 
 let canvas: HTMLCanvasElement
 let ctx: CanvasRenderingContext2D
@@ -32,7 +34,7 @@ const generator = rough.generator()
 
 const elements = ref<Element[]>([])
 let action = ActionTypes.NONE
-const toolType = ref<ElementType>(ToolTypes.LINE)
+const toolType = ref<ElementType>(ToolTypes.PENCIL)
 let selectedElement: (Element & { offsetX: number; offsetY: number }) | null
 
 onMounted(() => {
@@ -52,8 +54,7 @@ function createElement(
   type?: ElementType
 ) {
   let roughElement
-  const elementToolType = type || toolType.value
-  switch (elementToolType) {
+  switch (type) {
     case ToolTypes.ARROW:
       roughElement = generator.linearPath(getArrowPoints(x1, y1, x2, y2), {
         stroke: 'black',
@@ -66,11 +67,13 @@ function createElement(
     case ToolTypes.RECTANGLE:
       roughElement = generator.rectangle(x1, y1, x2 - x1, y2 - y1)
       break
+    case ToolTypes.PENCIL:
+      return { id, type, points: [[x1, y1]] }
     default:
-      roughElement = generator.line(x1, y1, x2, y2)
+      throw new Error('Invalid tool type')
   }
 
-  return { id, x1, y1, x2, y2, type: elementToolType, roughElement, position: '' }
+  return { id, x1, y1, x2, y2, type, roughElement, position: '' }
 }
 
 function updateElement(
@@ -81,34 +84,49 @@ function updateElement(
   y2: number,
   type?: ElementType
 ) {
-  const updatedElement = createElement(id, x1, y1, x2, y2, type)
+  const elementToolType = type || toolType.value
   const elementsCopy = [...elements.value]
-  elementsCopy[id] = updatedElement
+  if (elementToolType === ToolTypes.PENCIL) {
+    elementsCopy[id]?.points?.push([x2, y2])
+  } else {
+    const updatedElement = createElement(id, x1, y1, x2, y2, elementToolType)
+    elementsCopy[id] = updatedElement as Element
+  }
   elements.value = elementsCopy
+  reDraw()
 }
 
 function handleMouseDown(event: MouseEvent) {
   const { clientX, clientY } = event
   if (toolType.value === ToolTypes.SELECTION) {
     const element = getElementAtPosition(clientX, clientY)
-    if (element) {
-      const offsetX = clientX - element.x1
-      const offsetY = clientY - element.y1
-      selectedElement = { ...(element as Element), offsetX, offsetY }
-      if (element.position === positionNames.inside) {
-        action = ActionTypes.MOVING
-      } else {
-        action = ActionTypes.RESIZING
-      }
-      const { x1, y1, x2, y2, type } = selectedElement
-      createHistoryPoint(element.id, action, x1, y1, x2, y2, type, undoIndex)
-      undoIndex = 0
-    }
+    if (!element || element.type === ToolTypes.PENCIL) return
+    const offsetX = clientX - element.x1
+    const offsetY = clientY - element.y1
+    selectedElement = { ...(element as Element), offsetX, offsetY }
+    element.position === positionNames.inside
+      ? (action = ActionTypes.MOVING)
+      : (action = ActionTypes.RESIZING)
+    const { x1, y1, x2, y2, type } = selectedElement
+    createHistoryPoint(element.id, action, x1, y1, x2, y2, type, undoIndex)
+    undoIndex = 0
   } else {
-    const newElement = createElement(elements.value.length, clientX, clientY, clientX, clientY)
-    elements.value.push(newElement)
-    selectedElement = { ...newElement, offsetX: 0, offsetY: 0 }
+    const newElement = createElement(
+      elements.value.length,
+      clientX,
+      clientY,
+      clientX,
+      clientY,
+      toolType.value
+    )
+    elements.value.push(newElement as Element)
+    selectedElement = { ...newElement, offsetX: 0, offsetY: 0 } as Element & {
+      offsetX: number
+      offsetY: number
+    }
+    reDraw()
     action = ActionTypes.DRAWING
+    // TODO: fix for pencil
     createHistoryPoint(
       newElement.id,
       ActionTypes.DRAWING,
@@ -128,38 +146,46 @@ function handleMouseMove(event: MouseEvent) {
 
   if (toolType.value === ToolTypes.SELECTION) {
     const element = getElementAtPosition(clientX, clientY)
-    ;(event.target as HTMLElement).style.cursor = element
-      ? cursorForPosition(element.position as string)
-      : 'default'
+    ;(event.target as HTMLElement).style.cursor =
+      element && element.type !== ToolTypes.PENCIL // Temporary fix for pencil until I add delete functioanlity
+        ? cursorForPosition(element.position as string)
+        : 'default'
   }
 
   if (action === ActionTypes.DRAWING) {
     const index = elements.value.length - 1
     const { x1, y1 } = elements.value[index]
     updateElement(index, x1, y1, clientX, clientY)
+    reDraw()
   } else if (action === ActionTypes.MOVING) {
     if (selectedElement) {
       const { id, x1, x2, y1, y2, type, offsetX, offsetY } = selectedElement
       const newX1 = clientX - offsetX
       const newY1 = clientY - offsetY
       updateElement(id, newX1, newY1, newX1 + (x2 - x1), newY1 + (y2 - y1), type)
+      reDraw()
     }
   } else if (action === ActionTypes.RESIZING) {
     if (selectedElement) {
       const { id, type, position, ...coordinates } = selectedElement
       const { x1, y1, x2, y2 } = resizedCoordinates(clientX, clientY, position, coordinates)
       updateElement(id, x1, y1, x2, y2, type)
+      reDraw()
     }
   }
 }
 
 function handleMouseUp() {
   if (selectedElement) {
-    if (action === ActionTypes.DRAWING || action === ActionTypes.RESIZING) {
-      const index = selectedElement.id
-      const { id, type } = elements.value[index]
+    const index = selectedElement.id
+    const { id, type } = elements.value[index]
+    if (
+      (action === ActionTypes.DRAWING || action === ActionTypes.RESIZING) &&
+      adjustmentRequired(type)
+    ) {
       const { x1, y1, x2, y2 } = adjustElementCoordinates(elements.value[index] as Element)
       updateElement(id, x1, y1, x2, y2, type)
+      reDraw()
     }
   }
   action = ActionTypes.NONE
@@ -167,7 +193,35 @@ function handleMouseUp() {
 }
 
 function draw() {
-  elements.value.forEach(({ roughElement }) => roughCanvas.draw(roughElement as Drawable))
+  elements.value.forEach((element) => {
+    if (element.type !== ToolTypes.PENCIL && element.roughElement) {
+      roughCanvas.draw(element.roughElement as Drawable)
+    } else {
+      if (element.points) {
+        const outlinePoints = getStroke(element.points, {
+          size: 6,
+          smoothing: 0.5,
+          thinning: 0.5,
+          streamline: 1,
+          easing: (t) => t
+        })
+        const pathData = getSvgPathFromStroke(outlinePoints)
+        const myPath = new Path2D(pathData)
+        ctx.fill(myPath)
+      }
+    }
+  })
+}
+
+function reDraw() {
+  ctx.clearRect(0, 0, windowInnerWidth.value, windowInnerHeight.value)
+  draw()
+}
+
+function adjustmentRequired(type: ElementType) {
+  return [ToolTypes.ARROW, ToolTypes.LINE, ToolTypes.RECTANGLE].includes(
+    type as 'arrow' | 'line' | 'rectangle'
+  )
 }
 
 function getElementAtPosition(x: number, y: number) {
@@ -217,11 +271,6 @@ function Redo() {
   removeLastLocalRedo()
   undoIndex > 0 && undoIndex--
 }
-
-watch(elements, () => {
-  ctx.clearRect(0, 0, windowInnerWidth.value, windowInnerHeight.value)
-  draw()
-})
 </script>
 
 <template>

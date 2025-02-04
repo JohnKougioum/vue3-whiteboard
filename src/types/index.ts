@@ -1,5 +1,10 @@
 import type { Drawable } from "roughjs/bin/core";
 
+export interface Point {
+    x: number;
+    y: number;
+    pressure?: number;
+}
 export interface Element {
     x1: number;
     y1: number;
@@ -9,14 +14,15 @@ export interface Element {
     type: ElementType
     id: number
     position?: string
+    points?: number[][]
 }
 
 export const ToolTypes = {
     SELECTION: 'selection',
     ARROW: 'arrow',
     LINE: 'line',
-    // CIRCLE: 'circle',
     RECTANGLE: 'rectangle',
+    PENCIL: 'pencil',
 } as const
 
 export type ElementType = typeof ToolTypes[keyof typeof ToolTypes]
