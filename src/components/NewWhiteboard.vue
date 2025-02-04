@@ -101,7 +101,8 @@ function handleMouseDown(event: MouseEvent) {
         action = ActionTypes.RESIZING
       }
       const { x1, y1, x2, y2, type } = selectedElement
-      createHistoryPoint(element.id, action, x1, y1, x2, y2, type)
+      createHistoryPoint(element.id, action, x1, y1, x2, y2, type, undoIndex)
+      undoIndex = 0
     }
   } else {
     const newElement = createElement(elements.value.length, clientX, clientY, clientX, clientY)
@@ -115,8 +116,10 @@ function handleMouseDown(event: MouseEvent) {
       newElement.y1,
       newElement.x2,
       newElement.y2,
-      newElement.type
+      newElement.type,
+      undoIndex
     )
+    undoIndex = 0
   }
 }
 
@@ -175,7 +178,6 @@ function getElementAtPosition(x: number, y: number) {
 
 let undoIndex = 0
 function Undo() {
-  console.log(undoIndex)
   const lastAction = getLastHistoryPoint(undoIndex)
   const elementCopy = elements.value.find(({ id }) => id === lastAction?.id)
   if (lastAction) {

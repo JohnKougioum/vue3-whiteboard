@@ -5,9 +5,18 @@ export function createHistoryPoint(
   y1: number,
   x2: number,
   y2: number,
-  type: string
+  type: string,
+  undoIndex: number
 ) {
   const localHistory = getLocalHistory()
+  const localRedo = getLocalRedo()
+  if (localRedo.length) {
+    localRedo.splice(0, localRedo.length)
+    localStorage.setItem('redo', JSON.stringify(localRedo))
+
+    localHistory.splice(localHistory.length - undoIndex, undoIndex)
+    localStorage.setItem('history', JSON.stringify(localHistory))
+  }
   localHistory.push({ id, actionType, x1, y1, x2, y2, type })
   localStorage.setItem('history', JSON.stringify(localHistory))
 }
