@@ -8,13 +8,15 @@ export interface Element {
     roughElement: Drawable
     type: ElementType
     id: number
+    position?: string
 }
 
 export const ToolTypes = {
-    LINE: 'line',
-    CIRCLE: 'circle',
-    RECTANGLE: 'rectangle',
     SELECTION: 'selection',
+    ARROW: 'arrow',
+    LINE: 'line',
+    // CIRCLE: 'circle',
+    RECTANGLE: 'rectangle',
 } as const
 
 export type ElementType = typeof ToolTypes[keyof typeof ToolTypes]
@@ -23,5 +25,16 @@ export const ActionTypes = {
     DRAWING: 'drawing',
     MOVING: 'moving',
     DELETE: 'delete',
+    RESIZING: 'resizing',
     NONE: 'none'
+}
+
+export const positionNames = {
+    topLeft: 'topLeft',
+    topRight: 'topRight',
+    bottomLeft: 'bottomLeft',
+    bottomRight: 'bottomRight',
+    inside: 'inside',
+    start: 'start',
+    end: 'end'
 }

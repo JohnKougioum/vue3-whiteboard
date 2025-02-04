@@ -3,9 +3,23 @@ import { ref, computed, onMounted, watch } from 'vue'
 import rough from 'roughjs'
 import type { RoughCanvas } from 'roughjs/bin/canvas'
 import type { Element, ElementType } from '@/types'
-import { ToolTypes, ActionTypes } from '@/types'
+import { ToolTypes, ActionTypes, positionNames } from '@/types'
 import type { Drawable } from 'roughjs/bin/core'
-//TODO: https://www.youtube.com/watch?v=6arkndScw7A&list=PLSxgVLtIB0IFmQGuVMSE_wDHPW5rq4Ik7&index=1
+import {
+  getArrowPoints,
+  positionWithinElement,
+  cursorForPosition,
+  resizedCoordinates,
+  adjustElementCoordinates
+} from '../utils/whiteboard/utils'
+import {
+  createHistoryPoint,
+  getLastHistoryPoint,
+  getLastLocalRedo,
+  getLocalHistory,
+  removeLastLocalRedo,
+  storeRedoPoint
+} from '../utils/whiteboard/history'
 
 let canvas: HTMLCanvasElement
 let ctx: CanvasRenderingContext2D
@@ -40,17 +54,23 @@ function createElement(
   let roughElement
   const elementToolType = type || toolType.value
   switch (elementToolType) {
-    case 'line':
+    case ToolTypes.ARROW:
+      roughElement = generator.linearPath(getArrowPoints(x1, y1, x2, y2), {
+        stroke: 'black',
+        strokeWidth: 2
+      })
+      break
+    case ToolTypes.LINE:
       roughElement = generator.line(x1, y1, x2, y2)
       break
-    case 'rectangle':
+    case ToolTypes.RECTANGLE:
       roughElement = generator.rectangle(x1, y1, x2 - x1, y2 - y1)
       break
     default:
       roughElement = generator.line(x1, y1, x2, y2)
   }
 
-  return { id, x1, y1, x2, y2, type: elementToolType, roughElement }
+  return { id, x1, y1, x2, y2, type: elementToolType, roughElement, position: '' }
 }
 
 function updateElement(
@@ -75,12 +95,28 @@ function handleMouseDown(event: MouseEvent) {
       const offsetX = clientX - element.x1
       const offsetY = clientY - element.y1
       selectedElement = { ...(element as Element), offsetX, offsetY }
-      action = ActionTypes.MOVING
+      if (element.position === positionNames.inside) {
+        action = ActionTypes.MOVING
+      } else {
+        action = ActionTypes.RESIZING
+      }
+      const { x1, y1, x2, y2, type } = selectedElement
+      createHistoryPoint(element.id, action, x1, y1, x2, y2, type)
     }
   } else {
     const newElement = createElement(elements.value.length, clientX, clientY, clientX, clientY)
     elements.value.push(newElement)
+    selectedElement = { ...newElement, offsetX: 0, offsetY: 0 }
     action = ActionTypes.DRAWING
+    createHistoryPoint(
+      newElement.id,
+      ActionTypes.DRAWING,
+      newElement.x1,
+      newElement.y1,
+      newElement.x2,
+      newElement.y2,
+      newElement.type
+    )
   }
 }
 
@@ -88,8 +124,9 @@ function handleMouseMove(event: MouseEvent) {
   const { clientX, clientY } = event
 
   if (toolType.value === ToolTypes.SELECTION) {
-    ;(event.target as HTMLElement).style.cursor = getElementAtPosition(clientX, clientY)
-      ? 'move'
+    const element = getElementAtPosition(clientX, clientY)
+    ;(event.target as HTMLElement).style.cursor = element
+      ? cursorForPosition(element.position as string)
       : 'default'
   }
 
@@ -104,10 +141,24 @@ function handleMouseMove(event: MouseEvent) {
       const newY1 = clientY - offsetY
       updateElement(id, newX1, newY1, newX1 + (x2 - x1), newY1 + (y2 - y1), type)
     }
+  } else if (action === ActionTypes.RESIZING) {
+    if (selectedElement) {
+      const { id, type, position, ...coordinates } = selectedElement
+      const { x1, y1, x2, y2 } = resizedCoordinates(clientX, clientY, position, coordinates)
+      updateElement(id, x1, y1, x2, y2, type)
+    }
   }
 }
 
-function handleMouseUp(event: MouseEvent) {
+function handleMouseUp() {
+  if (selectedElement) {
+    if (action === ActionTypes.DRAWING || action === ActionTypes.RESIZING) {
+      const index = selectedElement.id
+      const { id, type } = elements.value[index]
+      const { x1, y1, x2, y2 } = adjustElementCoordinates(elements.value[index] as Element)
+      updateElement(id, x1, y1, x2, y2, type)
+    }
+  }
   action = ActionTypes.NONE
   selectedElement = null
 }
@@ -117,28 +168,52 @@ function draw() {
 }
 
 function getElementAtPosition(x: number, y: number) {
-  return elements.value.find((element) => isWithinElement(x, y, element as Element))
+  return elements.value
+    .map((element) => ({ ...element, position: positionWithinElement(x, y, element as Element) }))
+    .find((element) => !!element.position)
 }
 
-function isWithinElement(x: number, y: number, element: Element) {
-  const { x1, y1, x2, y2, type } = element
-  if (type === ToolTypes.RECTANGLE) {
-    const minX = Math.min(x1, x2)
-    const maxX = Math.max(x1, x2)
-    const minY = Math.min(y1, y2)
-    const maxY = Math.max(y1, y2)
-    return x >= minX && x <= maxX && y >= minY && y <= maxY
-  } else if (type === ToolTypes.LINE) {
-    const a = { x: x1, y: y1 }
-    const b = { x: x2, y: y2 }
-    const c = { x, y }
-    const offset = distance(a, b) - (distance(a, c) + distance(b, c))
-    return Math.abs(offset) < 1
+let undoIndex = 0
+function Undo() {
+  console.log(undoIndex)
+  const lastAction = getLastHistoryPoint(undoIndex)
+  const elementCopy = elements.value.find(({ id }) => id === lastAction?.id)
+  if (lastAction) {
+    const { id, actionType, x1, y1, x2, y2, type } = lastAction
+    if (actionType === ActionTypes.DRAWING) {
+      elements.value = elements.value.filter((element) => element.id !== id)
+    } else {
+      updateElement(id, x1, y1, x2, y2, type)
+    }
+    if (elementCopy) {
+      const { id, x1, y1, x2, y2, type } = elementCopy
+      storeRedoPoint(id, lastAction.actionType, type, x1, y1, x2, y2)
+    }
   }
+  undoIndex < getLocalHistory().length && undoIndex++
 }
 
-function distance(a: { x: number; y: number }, b: { x: number; y: number }) {
-  return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2))
+function Redo() {
+  const redoElement = getLastLocalRedo()
+  if (redoElement) {
+    const { id, x1, y1, x2, y2, type } = redoElement
+    if (elements.value.findIndex((element) => element.id === id) === -1) {
+      const newElement = createElement(id, x1, y1, x2, y2, type)
+      elements.value.push(newElement)
+      updateElement(
+        newElement.id,
+        newElement.x1,
+        newElement.y1,
+        newElement.x2,
+        newElement.y2,
+        newElement.type
+      )
+    } else {
+      updateElement(id, x1, y1, x2, y2, type)
+    }
+  }
+  removeLastLocalRedo()
+  undoIndex > 0 && undoIndex--
 }
 
 watch(elements, () => {
@@ -150,27 +225,14 @@ watch(elements, () => {
 <template>
   <div>
     <div style="position: fixed">
-      <input
-        type="radio"
-        id="selection"
-        :checked="toolType === ToolTypes.SELECTION"
-        @change="toolType = ToolTypes.SELECTION"
-      />
-      <label for="selection">Selection</label>
-      <input
-        type="radio"
-        id="line"
-        :checked="toolType === ToolTypes.LINE"
-        @change="toolType = ToolTypes.LINE"
-      />
-      <label for="line">Line</label>
-      <input
-        type="radio"
-        id="rectangle"
-        :checked="toolType === ToolTypes.RECTANGLE"
-        @change="toolType = ToolTypes.RECTANGLE"
-      />
-      <label for="rectangle">Rectangle</label>
+      <template v-for="tool in Object.values(ToolTypes)" :key="tool">
+        <input type="radio" :id="tool" :checked="toolType === tool" @change="toolType = tool" />
+        <label :for="tool">{{ tool }}</label>
+      </template>
+    </div>
+    <div style="position: fixed; bottom: 1%; left: 1%">
+      <button @click="Undo">Undo</button>
+      <button @click="Redo">Redo</button>
     </div>
     <canvas
       id="canvas"

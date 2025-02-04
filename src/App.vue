@@ -1,6 +1,12 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
+import { clearLocalHistory } from '@/utils/whiteboard/history'
 import WhiteboardWidget from './components/WhiteboardWidget.vue'
 import NewWhiteboard from './components/NewWhiteboard.vue'
+
+onMounted(() => {
+  clearLocalHistory()
+})
 </script>
 
 <template>
