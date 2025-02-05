@@ -29,7 +29,7 @@ export function positionWithinElement(x: number, y: number, element: Element) {
     const betweenAnyPoint = element.points?.some(([px, py], index) => {
       const nextPoint = element.points?.[index + 1]
       if (!nextPoint) return false
-      return onLine(px, py, nextPoint[0], nextPoint[1], x, y, 5)
+      return onLine(px, py, nextPoint[0], nextPoint[1], x, y, 10)
     })
     return betweenAnyPoint ? positionNames.inside : null
   }

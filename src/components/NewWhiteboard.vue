@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import rough from 'roughjs'
 import type { RoughCanvas } from 'roughjs/bin/canvas'
 import type { Element, ElementType } from '@/types'
@@ -22,13 +22,13 @@ import {
   storeRedoPoint
 } from '../utils/whiteboard/history'
 import { getStroke } from 'perfect-freehand'
+import { useWindowSize, useEventListener } from '@vueuse/core'
 
 let canvas: HTMLCanvasElement
 let ctx: CanvasRenderingContext2D
 let roughCanvas: RoughCanvas
 
-const windowInnerWidth = computed(() => window?.innerWidth || 0)
-const windowInnerHeight = computed(() => window?.innerHeight || 0)
+const { width: windowInnerWidth, height: windowInnerHeight } = useWindowSize()
 
 const generator = rough.generator()
 
@@ -42,6 +42,18 @@ onMounted(() => {
   ctx = canvas.getContext('2d') as CanvasRenderingContext2D
   roughCanvas = rough.canvas(canvas)
   draw()
+})
+
+useEventListener('resize', () => {
+  reDraw()
+})
+useEventListener('keydown', (event) => {
+  const ctrlKey = event.ctrlKey || event.altKey
+  if ((event.code === 'KeyY' && ctrlKey) || (event.code === 'KeyZ' && ctrlKey && event.shiftKey)) {
+    Redo()
+  } else if (event.code === 'KeyZ' && ctrlKey) {
+    Undo()
+  }
 })
 
 function createElement(
@@ -99,7 +111,8 @@ function handleMouseDown(event: MouseEvent) {
   const { clientX, clientY } = event
   if (toolType.value === ToolTypes.SELECTION || toolType.value === ToolTypes.DELETE) {
     const element = getElementAtPosition(clientX, clientY)
-    if (!element || element.type === ToolTypes.PENCIL) return
+    if (!element || (toolType.value !== ToolTypes.DELETE && element.type === ToolTypes.PENCIL))
+      return
     const offsetX = clientX - element.x1
     const offsetY = clientY - element.y1
     selectedElement = { ...(element as Element), offsetX, offsetY }
@@ -108,8 +121,8 @@ function handleMouseDown(event: MouseEvent) {
     } else {
       action = element.position === positionNames.inside ? ActionTypes.MOVING : ActionTypes.RESIZING
     }
-    const { x1, y1, x2, y2, type } = selectedElement
-    createHistoryPoint(element.id, action, type, undoIndex, x1, y1, x2, y2)
+    const { x1, y1, x2, y2, points, type } = selectedElement
+    createHistoryPoint(element.id, action, type, undoIndex, x1, y1, x2, y2, points)
     undoIndex = 0
   } else {
     const newElement = createElement(
@@ -144,12 +157,32 @@ function handleMouseDown(event: MouseEvent) {
 function handleMouseMove(event: MouseEvent) {
   const { clientX, clientY } = event
 
+  ;(event.target as HTMLElement).style.cursor = 'default'
   if (toolType.value === ToolTypes.SELECTION) {
     const element = getElementAtPosition(clientX, clientY)
     ;(event.target as HTMLElement).style.cursor =
-      element && element.type !== ToolTypes.PENCIL // Temporary fix for pencil until I add delete functioanlity
+      element && element.type !== ToolTypes.PENCIL
         ? cursorForPosition(element.position as string)
         : 'default'
+  }
+  if (toolType.value === ToolTypes.DELETE) {
+    const svgData = encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <path
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M9 7a3 3 0 0 1 3-3v0a3 3 0 0 1 3 3v0M9 7h6M9 7H6m9 0h3m2 0h-2M4 7h2m0 0v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7"
+        />
+      </svg>
+    `)
+    const cursorUrl = `data:image/svg+xml;charset=utf-8,${svgData}`
+    ;(event.target as HTMLElement).style.cursor = `url(${cursorUrl}), auto`
+  }
+  if (toolType.value === ToolTypes.PENCIL) {
+    ;(event.target as HTMLElement).style.cursor = 'crosshair'
   }
 
   if (action === ActionTypes.DRAWING) {
@@ -178,7 +211,7 @@ function handleMouseMove(event: MouseEvent) {
 function handleMouseUp() {
   if (selectedElement) {
     const index = selectedElement.id
-    const { id, type } = elements.value[index]
+    const { id, type } = elements.value.find((element) => element.id === index) as Element
     if (
       (action === ActionTypes.DRAWING || action === ActionTypes.RESIZING) &&
       adjustmentRequired(type)
@@ -197,11 +230,11 @@ function handleMouseUp() {
 }
 
 function draw() {
-  elements.value.forEach((element) => {
-    if (element.type !== ToolTypes.PENCIL && element.roughElement) {
+  elements.value?.forEach((element) => {
+    if (element?.type !== ToolTypes.PENCIL && element?.roughElement) {
       roughCanvas.draw(element.roughElement as Drawable)
     } else {
-      if (element.points) {
+      if (element?.points) {
         const outlinePoints = getStroke(element.points, {
           size: 6,
           smoothing: 0.5,
@@ -237,16 +270,21 @@ function getElementAtPosition(x: number, y: number) {
 let undoIndex = 0
 function Undo() {
   const lastAction = getLastHistoryPoint(undoIndex)
-  const elementCopy = elements.value.find(({ id }) => id === lastAction?.id)
+  const elementCopy =
+    elements.value.find((element) => {
+      return element?.id === lastAction?.id
+    }) || {}
   if (lastAction) {
     const { id, actionType, x1, y1, x2, y2, points, type } = lastAction
     if (actionType === ActionTypes.DRAWING) {
       elements.value = elements.value.filter((element) => element.id !== id)
     } else {
-      updateElement(id, x1, y1, x2, y2, type)
+      type === ToolTypes.PENCIL
+        ? elements.value.push({ id, type, points } as Element)
+        : updateElement(id, x1, y1, x2, y2, type)
     }
-    if (elementCopy) {
-      const { id, x1, y1, x2, y2, points, type } = elementCopy
+    if (Object.keys(elementCopy).length) {
+      const { id, x1, y1, x2, y2, points, type } = elementCopy as Element
       storeRedoPoint(id, lastAction.actionType, type, x1, y1, x2, y2, points)
     } else if (actionType === ActionTypes.DELETING) {
       storeRedoPoint(id, lastAction.actionType, type, x1, y1, x2, y2, points)
