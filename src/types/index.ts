@@ -19,6 +19,7 @@ export interface Element {
 
 export const ToolTypes = {
     SELECTION: 'selection',
+    DELETE: 'delete',
     ARROW: 'arrow',
     LINE: 'line',
     RECTANGLE: 'rectangle',
@@ -30,8 +31,8 @@ export type ElementType = typeof ToolTypes[keyof typeof ToolTypes]
 export const ActionTypes = {
     DRAWING: 'drawing',
     MOVING: 'moving',
-    DELETE: 'delete',
     RESIZING: 'resizing',
+    DELETING: 'deleting',
     NONE: 'none'
 }
 

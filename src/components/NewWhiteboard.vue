@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import rough from 'roughjs'
 import type { RoughCanvas } from 'roughjs/bin/canvas'
 import type { Element, ElementType } from '@/types'
@@ -40,7 +40,6 @@ let selectedElement: (Element & { offsetX: number; offsetY: number }) | null
 onMounted(() => {
   canvas = document.getElementById('canvas') as HTMLCanvasElement
   ctx = canvas.getContext('2d') as CanvasRenderingContext2D
-
   roughCanvas = rough.canvas(canvas)
   draw()
 })
@@ -98,17 +97,19 @@ function updateElement(
 
 function handleMouseDown(event: MouseEvent) {
   const { clientX, clientY } = event
-  if (toolType.value === ToolTypes.SELECTION) {
+  if (toolType.value === ToolTypes.SELECTION || toolType.value === ToolTypes.DELETE) {
     const element = getElementAtPosition(clientX, clientY)
     if (!element || element.type === ToolTypes.PENCIL) return
     const offsetX = clientX - element.x1
     const offsetY = clientY - element.y1
     selectedElement = { ...(element as Element), offsetX, offsetY }
-    element.position === positionNames.inside
-      ? (action = ActionTypes.MOVING)
-      : (action = ActionTypes.RESIZING)
+    if (toolType.value === ToolTypes.DELETE) {
+      action = ActionTypes.DELETING
+    } else {
+      action = element.position === positionNames.inside ? ActionTypes.MOVING : ActionTypes.RESIZING
+    }
     const { x1, y1, x2, y2, type } = selectedElement
-    createHistoryPoint(element.id, action, x1, y1, x2, y2, type, undoIndex)
+    createHistoryPoint(element.id, action, type, undoIndex, x1, y1, x2, y2)
     undoIndex = 0
   } else {
     const newElement = createElement(
@@ -126,16 +127,15 @@ function handleMouseDown(event: MouseEvent) {
     }
     reDraw()
     action = ActionTypes.DRAWING
-    // TODO: fix for pencil
     createHistoryPoint(
       newElement.id,
       ActionTypes.DRAWING,
+      newElement.type,
+      undoIndex,
       newElement.x1,
       newElement.y1,
       newElement.x2,
-      newElement.y2,
-      newElement.type,
-      undoIndex
+      newElement.y2
     )
     undoIndex = 0
   }
@@ -186,6 +186,10 @@ function handleMouseUp() {
       const { x1, y1, x2, y2 } = adjustElementCoordinates(elements.value[index] as Element)
       updateElement(id, x1, y1, x2, y2, type)
       reDraw()
+    } else if (action === ActionTypes.DELETING) {
+      const index = selectedElement.id
+      elements.value = elements.value.filter((element) => element.id !== index)
+      reDraw()
     }
   }
   action = ActionTypes.NONE
@@ -235,39 +239,50 @@ function Undo() {
   const lastAction = getLastHistoryPoint(undoIndex)
   const elementCopy = elements.value.find(({ id }) => id === lastAction?.id)
   if (lastAction) {
-    const { id, actionType, x1, y1, x2, y2, type } = lastAction
+    const { id, actionType, x1, y1, x2, y2, points, type } = lastAction
     if (actionType === ActionTypes.DRAWING) {
       elements.value = elements.value.filter((element) => element.id !== id)
     } else {
       updateElement(id, x1, y1, x2, y2, type)
     }
     if (elementCopy) {
-      const { id, x1, y1, x2, y2, type } = elementCopy
-      storeRedoPoint(id, lastAction.actionType, type, x1, y1, x2, y2)
+      const { id, x1, y1, x2, y2, points, type } = elementCopy
+      storeRedoPoint(id, lastAction.actionType, type, x1, y1, x2, y2, points)
+    } else if (actionType === ActionTypes.DELETING) {
+      storeRedoPoint(id, lastAction.actionType, type, x1, y1, x2, y2, points)
     }
   }
+  reDraw()
   undoIndex < getLocalHistory().length && undoIndex++
 }
 
 function Redo() {
   const redoElement = getLastLocalRedo()
   if (redoElement) {
-    const { id, x1, y1, x2, y2, type } = redoElement
-    if (elements.value.findIndex((element) => element.id === id) === -1) {
-      const newElement = createElement(id, x1, y1, x2, y2, type)
-      elements.value.push(newElement)
-      updateElement(
-        newElement.id,
-        newElement.x1,
-        newElement.y1,
-        newElement.x2,
-        newElement.y2,
-        newElement.type
-      )
+    const { id, actionType, x1, y1, x2, y2, points, type } = redoElement
+    if (actionType === ActionTypes.DELETING) {
+      elements.value = elements.value.filter((element) => element.id !== id)
+      reDraw()
+    } else if (elements.value.findIndex((element) => element.id === id) === -1) {
+      if (type === ToolTypes.PENCIL && points) {
+        elements.value.push({ id, type, points } as Element)
+      } else {
+        const newElement = createElement(id, x1, y1, x2, y2, type) as Element
+        elements.value.push(newElement)
+        updateElement(
+          newElement.id,
+          newElement.x1,
+          newElement.y1,
+          newElement.x2,
+          newElement.y2,
+          newElement.type
+        )
+      }
     } else {
       updateElement(id, x1, y1, x2, y2, type)
     }
   }
+  reDraw()
   removeLastLocalRedo()
   undoIndex > 0 && undoIndex--
 }
