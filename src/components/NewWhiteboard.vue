@@ -40,6 +40,8 @@ let selectedElement: (Element & { offsetX: number; offsetY: number }) | null
 const panOffset = reactive({ x: 0, y: 0 })
 const startPanMousePosition = reactive({ x: 0, y: 0 })
 
+const scale = ref(1)
+
 onMounted(() => {
   canvas = document.getElementById('canvas') as HTMLCanvasElement
   ctx = canvas.getContext('2d') as CanvasRenderingContext2D
@@ -113,13 +115,13 @@ function updateElement(
 function handleMouseDown(event: MouseEvent) {
   const { clientX, clientY } = getMouseCoordinates(event)
 
-  if(event.button === 1) {
+  if (event.button === 1) {
     event.preventDefault()
     action = ActionTypes.PANNING
     startPanMousePosition.x = clientX
     startPanMousePosition.y = clientY
     canvas.style.cursor = 'move'
-    return;
+    return
   }
 
   if (toolType.value === ToolTypes.SELECTION || toolType.value === ToolTypes.DELETE) {
@@ -170,13 +172,13 @@ function handleMouseDown(event: MouseEvent) {
 function handleMouseMove(event: MouseEvent) {
   const { clientX, clientY } = getMouseCoordinates(event)
 
-  if(action === ActionTypes.PANNING) {
+  if (action === ActionTypes.PANNING) {
     const deltaX = clientX - startPanMousePosition.x
     const deltaY = clientY - startPanMousePosition.y
     panOffset.x += deltaX
     panOffset.y += deltaY
     reDraw()
-    return;
+    return
   }
 
   ;(event.target as HTMLElement).style.cursor = 'default'
@@ -271,7 +273,10 @@ function draw() {
 function reDraw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.save()
-  ctx.translate(panOffset.x, panOffset.y)
+  const scaleOffsetX = (canvas.width * scale.value - canvas.width) / 2
+  const scaleOffsetY = (canvas.height * scale.value - canvas.height) / 2
+  ctx.translate(panOffset.x * scale.value - scaleOffsetX, panOffset.y * scale.value - scaleOffsetY)
+  ctx.scale(scale.value, scale.value)
   draw()
   ctx.restore()
 }
@@ -346,35 +351,52 @@ function Redo() {
   undoIndex > 0 && undoIndex--
 }
 
+function onZoom(delta: number) {
+  scale.value = Math.min(Math.max(scale.value + delta, 0.1), 2)
+  reDraw()
+}
+
 function getMouseCoordinates(event: MouseEvent) {
+  const scaleOffsetX = (canvas.width * scale.value - canvas.width) / 2
+  const scaleOffsetY = (canvas.height * scale.value - canvas.height) / 2
   return {
-    clientX: event.clientX - panOffset.x,
-    clientY: event.clientY - panOffset.y 
+    clientX: (event.clientX - panOffset.x * scale.value + scaleOffsetX) / scale.value,
+    clientY: (event.clientY - panOffset.y * scale.value + scaleOffsetY) / scale.value
   }
 }
 
 useEventListener('wheel', (event) => {
-  panOffset.x -= event.deltaX
-  panOffset.y -= event.deltaY
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    event.preventDefault()
+    onZoom(event.deltaY * -0.001)
+  } else {
+    panOffset.x -= event.deltaX
+    panOffset.y -= event.deltaY
+  }
   reDraw()
-})
+}, { passive: false })
 </script>
 
 <template>
   <div>
-    <div style="position: fixed; z-index: 2;">
+    <div style="position: fixed; z-index: 2">
       <template v-for="tool in Object.values(ToolTypes)" :key="tool">
         <input type="radio" :id="tool" :checked="toolType === tool" @change="toolType = tool" />
         <label :for="tool">{{ tool }}</label>
       </template>
     </div>
-    <div style="position: fixed; bottom: 1%; left: 1%; z-index: 2;">
-      <button @click="Undo">Undo</button>
-      <button @click="Redo">Redo</button>
+    <div style="position: fixed; bottom: 1%; left: 1%; z-index: 2">
+      <button style="margin-right: 10px" @click="Undo">Undo</button>
+      <button @click="onZoom(-0.1)">-</button>
+      <button @click="scale = 1">
+        {{ new Intl.NumberFormat('en-US', { style: 'percent' }).format(scale) }}
+      </button>
+      <button @click="onZoom(0.1)">+</button>
+      <button style="margin-left: 10px" @click="Redo">Redo</button>
     </div>
     <canvas
       id="canvas"
-      style="position: absolute; z-index: 1; overflow: hidden;"
+      style="position: absolute; z-index: 1; overflow: hidden"
       :width="windowInnerWidth"
       :height="windowInnerHeight"
       @mousedown="handleMouseDown"
