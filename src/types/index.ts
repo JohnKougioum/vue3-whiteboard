@@ -33,6 +33,7 @@ export const ActionTypes = {
     MOVING: 'moving',
     RESIZING: 'resizing',
     DELETING: 'deleting',
+    PANNING: 'panning',
     NONE: 'none'
 }
 

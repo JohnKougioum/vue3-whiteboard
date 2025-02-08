@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, reactive } from 'vue'
 import rough from 'roughjs'
 import type { RoughCanvas } from 'roughjs/bin/canvas'
 import type { Element, ElementType } from '@/types'
@@ -36,6 +36,9 @@ const elements = ref<Element[]>([])
 let action = ActionTypes.NONE
 const toolType = ref<ElementType>(ToolTypes.PENCIL)
 let selectedElement: (Element & { offsetX: number; offsetY: number }) | null
+
+const panOffset = reactive({ x: 0, y: 0 })
+const startPanMousePosition = reactive({ x: 0, y: 0 })
 
 onMounted(() => {
   canvas = document.getElementById('canvas') as HTMLCanvasElement
@@ -108,7 +111,17 @@ function updateElement(
 }
 
 function handleMouseDown(event: MouseEvent) {
-  const { clientX, clientY } = event
+  const { clientX, clientY } = getMouseCoordinates(event)
+
+  if(event.button === 1) {
+    event.preventDefault()
+    action = ActionTypes.PANNING
+    startPanMousePosition.x = clientX
+    startPanMousePosition.y = clientY
+    canvas.style.cursor = 'move'
+    return;
+  }
+
   if (toolType.value === ToolTypes.SELECTION || toolType.value === ToolTypes.DELETE) {
     const element = getElementAtPosition(clientX, clientY)
     if (!element || (toolType.value !== ToolTypes.DELETE && element.type === ToolTypes.PENCIL))
@@ -155,7 +168,16 @@ function handleMouseDown(event: MouseEvent) {
 }
 
 function handleMouseMove(event: MouseEvent) {
-  const { clientX, clientY } = event
+  const { clientX, clientY } = getMouseCoordinates(event)
+
+  if(action === ActionTypes.PANNING) {
+    const deltaX = clientX - startPanMousePosition.x
+    const deltaY = clientY - startPanMousePosition.y
+    panOffset.x += deltaX
+    panOffset.y += deltaY
+    reDraw()
+    return;
+  }
 
   ;(event.target as HTMLElement).style.cursor = 'default'
   if (toolType.value === ToolTypes.SELECTION) {
@@ -189,21 +211,18 @@ function handleMouseMove(event: MouseEvent) {
     const index = elements.value.length - 1
     const { x1, y1 } = elements.value[index]
     updateElement(index, x1, y1, clientX, clientY)
-    reDraw()
   } else if (action === ActionTypes.MOVING) {
     if (selectedElement) {
       const { id, x1, x2, y1, y2, type, offsetX, offsetY } = selectedElement
       const newX1 = clientX - offsetX
       const newY1 = clientY - offsetY
       updateElement(id, newX1, newY1, newX1 + (x2 - x1), newY1 + (y2 - y1), type)
-      reDraw()
     }
   } else if (action === ActionTypes.RESIZING) {
     if (selectedElement) {
       const { id, type, position, ...coordinates } = selectedElement
       const { x1, y1, x2, y2 } = resizedCoordinates(clientX, clientY, position, coordinates)
       updateElement(id, x1, y1, x2, y2, type)
-      reDraw()
     }
   }
 }
@@ -218,7 +237,6 @@ function handleMouseUp() {
     ) {
       const { x1, y1, x2, y2 } = adjustElementCoordinates(elements.value[index] as Element)
       updateElement(id, x1, y1, x2, y2, type)
-      reDraw()
     } else if (action === ActionTypes.DELETING) {
       const index = selectedElement.id
       elements.value = elements.value.filter((element) => element.id !== index)
@@ -251,8 +269,11 @@ function draw() {
 }
 
 function reDraw() {
-  ctx.clearRect(0, 0, windowInnerWidth.value, windowInnerHeight.value)
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.save()
+  ctx.translate(panOffset.x, panOffset.y)
   draw()
+  ctx.restore()
 }
 
 function adjustmentRequired(type: ElementType) {
@@ -324,22 +345,36 @@ function Redo() {
   removeLastLocalRedo()
   undoIndex > 0 && undoIndex--
 }
+
+function getMouseCoordinates(event: MouseEvent) {
+  return {
+    clientX: event.clientX - panOffset.x,
+    clientY: event.clientY - panOffset.y 
+  }
+}
+
+useEventListener('wheel', (event) => {
+  panOffset.x -= event.deltaX
+  panOffset.y -= event.deltaY
+  reDraw()
+})
 </script>
 
 <template>
   <div>
-    <div style="position: fixed">
+    <div style="position: fixed; z-index: 2;">
       <template v-for="tool in Object.values(ToolTypes)" :key="tool">
         <input type="radio" :id="tool" :checked="toolType === tool" @change="toolType = tool" />
         <label :for="tool">{{ tool }}</label>
       </template>
     </div>
-    <div style="position: fixed; bottom: 1%; left: 1%">
+    <div style="position: fixed; bottom: 1%; left: 1%; z-index: 2;">
       <button @click="Undo">Undo</button>
       <button @click="Redo">Redo</button>
     </div>
     <canvas
       id="canvas"
+      style="position: absolute; z-index: 1; overflow: hidden;"
       :width="windowInnerWidth"
       :height="windowInnerHeight"
       @mousedown="handleMouseDown"
